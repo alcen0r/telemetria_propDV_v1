@@ -1,0 +1,262 @@
+VERSION ""
+
+
+NS_ :
+
+BS_:
+
+BU_: DV
+
+
+BO_ 1536 DV_POSE: 8 DV
+ SG_ DV_POSE_X : 0|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_POSE_Y : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_POSE_YAW : 32|16@1- (0.001,0) [-32.768|32.767] "rad" Vector__XXX
+ SG_ DV_SPEED : 48|16@1+ (0.01,0) [0|655.35] "m/s" Vector__XXX
+
+BO_ 1537 DV_STATUS: 8 DV
+ SG_ DV_MAP_CONES_N : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_PERC_CONES_N : 16|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_MAP_LAT_MS : 32|16@1+ (0.1,0) [0|6553.5] "ms" Vector__XXX
+ SG_ DV_PERC_LAT_MS : 48|16@1+ (0.1,0) [0|6553.5] "ms" Vector__XXX
+
+BO_ 1538 DV_MISSION: 8 DV
+ SG_ DV_LAP : 0|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_AS_STATE : 8|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_MISSION : 16|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_MAP_LOCKED : 24|8@1+ (1,0) [0|1] "" Vector__XXX
+
+BO_ 1539 DV_CONTROL: 8 DV
+ SG_ DV_STEER_CMD : 0|16@1- (0.01,0) [-327.68|327.67] "deg" Vector__XXX
+ SG_ DV_SPEED_TARGET : 16|16@1+ (0.01,0) [0|655.35] "m/s" Vector__XXX
+
+BO_ 1568 DV_MAP_CONE_00: 8 DV
+ SG_ DV_MAP_00_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_MAP_00_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_00_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_00_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_MAP_00_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1569 DV_MAP_CONE_01: 8 DV
+ SG_ DV_MAP_01_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_MAP_01_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_01_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_01_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_MAP_01_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1570 DV_MAP_CONE_02: 8 DV
+ SG_ DV_MAP_02_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_MAP_02_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_02_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_02_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_MAP_02_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1571 DV_MAP_CONE_03: 8 DV
+ SG_ DV_MAP_03_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_MAP_03_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_03_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_03_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_MAP_03_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1572 DV_MAP_CONE_04: 8 DV
+ SG_ DV_MAP_04_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_MAP_04_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_04_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_04_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_MAP_04_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1573 DV_MAP_CONE_05: 8 DV
+ SG_ DV_MAP_05_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_MAP_05_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_05_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_05_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_MAP_05_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1574 DV_MAP_CONE_06: 8 DV
+ SG_ DV_MAP_06_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_MAP_06_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_06_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_06_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_MAP_06_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1575 DV_MAP_CONE_07: 8 DV
+ SG_ DV_MAP_07_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_MAP_07_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_07_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_07_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_MAP_07_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1576 DV_MAP_CONE_08: 8 DV
+ SG_ DV_MAP_08_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_MAP_08_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_08_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_08_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_MAP_08_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1577 DV_MAP_CONE_09: 8 DV
+ SG_ DV_MAP_09_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_MAP_09_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_09_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_09_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_MAP_09_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1578 DV_MAP_CONE_10: 8 DV
+ SG_ DV_MAP_10_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_MAP_10_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_10_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_10_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_MAP_10_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1579 DV_MAP_CONE_11: 8 DV
+ SG_ DV_MAP_11_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_MAP_11_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_11_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_11_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_MAP_11_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1580 DV_MAP_CONE_12: 8 DV
+ SG_ DV_MAP_12_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_MAP_12_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_12_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_12_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_MAP_12_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1581 DV_MAP_CONE_13: 8 DV
+ SG_ DV_MAP_13_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_MAP_13_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_13_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_13_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_MAP_13_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1582 DV_MAP_CONE_14: 8 DV
+ SG_ DV_MAP_14_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_MAP_14_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_14_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_14_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_MAP_14_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1583 DV_MAP_CONE_15: 8 DV
+ SG_ DV_MAP_15_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_MAP_15_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_15_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_MAP_15_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_MAP_15_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1584 DV_PERC_CONE_00: 8 DV
+ SG_ DV_PERC_00_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_PERC_00_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_00_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_00_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_PERC_00_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1585 DV_PERC_CONE_01: 8 DV
+ SG_ DV_PERC_01_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_PERC_01_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_01_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_01_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_PERC_01_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1586 DV_PERC_CONE_02: 8 DV
+ SG_ DV_PERC_02_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_PERC_02_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_02_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_02_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_PERC_02_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1587 DV_PERC_CONE_03: 8 DV
+ SG_ DV_PERC_03_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_PERC_03_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_03_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_03_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_PERC_03_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1588 DV_PERC_CONE_04: 8 DV
+ SG_ DV_PERC_04_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_PERC_04_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_04_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_04_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_PERC_04_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1589 DV_PERC_CONE_05: 8 DV
+ SG_ DV_PERC_05_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_PERC_05_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_05_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_05_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_PERC_05_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1590 DV_PERC_CONE_06: 8 DV
+ SG_ DV_PERC_06_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_PERC_06_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_06_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_06_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_PERC_06_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1591 DV_PERC_CONE_07: 8 DV
+ SG_ DV_PERC_07_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_PERC_07_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_07_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_07_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_PERC_07_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1592 DV_PERC_CONE_08: 8 DV
+ SG_ DV_PERC_08_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_PERC_08_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_08_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_08_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_PERC_08_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1593 DV_PERC_CONE_09: 8 DV
+ SG_ DV_PERC_09_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_PERC_09_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_09_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_09_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_PERC_09_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1594 DV_PERC_CONE_10: 8 DV
+ SG_ DV_PERC_10_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_PERC_10_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_10_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_10_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_PERC_10_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1595 DV_PERC_CONE_11: 8 DV
+ SG_ DV_PERC_11_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_PERC_11_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_11_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_11_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_PERC_11_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1596 DV_PERC_CONE_12: 8 DV
+ SG_ DV_PERC_12_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_PERC_12_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_12_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_12_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_PERC_12_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1597 DV_PERC_CONE_13: 8 DV
+ SG_ DV_PERC_13_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_PERC_13_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_13_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_13_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_PERC_13_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1598 DV_PERC_CONE_14: 8 DV
+ SG_ DV_PERC_14_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_PERC_14_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_14_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_14_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_PERC_14_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1599 DV_PERC_CONE_15: 8 DV
+ SG_ DV_PERC_15_IDX : 0|16@1+ (1,0) [0|65535] "" Vector__XXX
+ SG_ DV_PERC_15_X : 16|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_15_Y : 32|16@1- (0.01,0) [-327.68|327.67] "m" Vector__XXX
+ SG_ DV_PERC_15_COLOR : 48|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ DV_PERC_15_FLAGS : 56|8@1+ (1,0) [0|255] "" Vector__XXX
+
+BO_ 1616 DV_STEER_MOTOR: 8 DV
+ SG_ STEER_ANGLE : 0|16@1- (0.1,0) [-3276.8|3276.7] "deg" Vector__XXX
+ SG_ STEER_RPM : 16|16@1- (1,0) [-32768|32767] "rpm" Vector__XXX
+ SG_ STEER_CURRENT : 32|16@1- (0.1,0) [-3276.8|3276.7] "A" Vector__XXX
+ SG_ STEER_TEMP : 48|8@1- (1,0) [-128|127] "C" Vector__XXX
+

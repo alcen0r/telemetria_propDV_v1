@@ -1,0 +1,105 @@
+[
+ {
+  "name": "dv_20261021_224540",
+  "duration": 121.39779448509216,
+  "records": 1208,
+  "frames": 1196,
+  "latency_assumed": 0.1,
+  "lap_times": [
+   21.012755155563354,
+   20.974590063095093,
+   20.876550912857056,
+   20.997263431549072,
+   20.871708631515503
+  ],
+  "lap1": 21.012755155563354,
+  "best_lap": 20.871708631515503,
+  "median_2plus": 20.925570487976074,
+  "speed_mean": 10.027637845675196,
+  "speed_max": 11.999994371890697,
+  "cones_per_frame": 2.0422185430463577,
+  "perc_lat": {
+   "p50": 30.05003877367979,
+   "p95": 37.89801836978682,
+   "max": 37.99997934257626
+  },
+  "map_lat": {
+   "p50": 12.093732034000247,
+   "p95": 14.965214057576635,
+   "max": 14.999991557836044
+  },
+  "as_state": "AS Driving",
+  "ref_label": "ground truth",
+  "map_final": {
+   "n_built": 135,
+   "n_ref": 96,
+   "matched": 64,
+   "precision": 0.4740740740740741,
+   "recall": 0.6666666666666666,
+   "rmse": 0.6374083218458684,
+   "color_acc": 1.0
+  },
+  "map_v1": {
+   "n_built": 80,
+   "n_ref": 96,
+   "matched": 56,
+   "precision": 0.7,
+   "recall": 0.5833333333333334,
+   "rmse": 0.6716667048599738,
+   "color_acc": 1.0
+  },
+  "n_ghost": 7,
+  "n_confirmed": 135,
+  "steer": {
+   "max_angle": 25.47638982376618,
+   "rms_err": 1.7820027431473116,
+   "p95_err": 2.5752166760523356,
+   "max_current": 5.999997973880042,
+   "max_temp": 43.99999726086998
+  },
+  "findings": [
+   {
+    "status": "ok",
+    "title": "Contagem de voltas",
+    "body": "Voltas detectadas pelo estado da missão (ou retorno à largada).",
+    "metric": "5 voltas · melhor 20.9 s"
+   },
+   {
+    "status": "open",
+    "title": "Mapa de cones vs ground truth",
+    "body": "Cones confirmados com ≥3 detecções, casados em 1 m com a referência.",
+    "metric": "precisão 47% · recall 67% · RMSE 0.64 m · fantasmas 7"
+   },
+   {
+    "status": "open",
+    "title": "Mapa da volta 1",
+    "body": "Meta de referência (AMZ real): RMSE 0.25 m.",
+    "metric": "RMSE v1 0.67 m → final 0.64 m"
+   },
+   {
+    "status": "ok",
+    "title": "Cor dos cones",
+    "body": "Voto de cor ponderado por distância.",
+    "metric": "100%"
+   },
+   {
+    "status": "ok",
+    "title": "Latência da percepção",
+    "body": "Medida pelo stamp da mensagem.",
+    "metric": "p50 30 ms · p95 38 ms"
+   },
+   {
+    "status": "ok",
+    "title": "Seguimento do comando de steering",
+    "body": "RMS de (comando − ângulo real).",
+    "metric": "RMS 1.78° · p95 2.58° · máx 25°"
+   },
+   {
+    "status": "ok",
+    "title": "Corrente e temperatura do steering",
+    "body": "Limites de alerta em analysis.py (LIM).",
+    "metric": "6.0 A máx · 44 °C máx"
+   }
+  ]
+ }
+]

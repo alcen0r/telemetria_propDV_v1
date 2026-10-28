@@ -1,0 +1,12 @@
+# Jetson: sudo cp dv-edge.service /etc/systemd/system/ && sudo systemctl enable --now dv-edge
+[Unit]
+Description=Telemetria DV (ROS2 -> telemetry-server)
+After=network-online.target
+
+[Service]
+WorkingDirectory=/home/nvidia/TelemetriaV2.0-DV/dv-edge
+ExecStart=/bin/bash -lc 'source /opt/ros/humble/setup.bash && python3 -m dv_edge.main --server 143.106.207.21:8080'
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

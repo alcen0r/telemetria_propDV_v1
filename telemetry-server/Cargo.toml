@@ -1,0 +1,36 @@
+[package]
+name = "telemetry-server"
+version = "2.0.0"
+edition = "2021"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+dotenvy = "0.15"
+
+# Bancos de dados
+sqlx = { version = "0.7", features = [
+    "postgres",
+    "sqlite",
+    "runtime-tokio-native-tls",
+    "chrono",
+] }
+
+# Serialização JSON
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# CSV para mapa CAN
+csv = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Data/hora
+chrono = { version = "0.4", features = ["serde"] }
+
+# Autenticação JWT + bcrypt
+jsonwebtoken = "9"
+bcrypt = "0.15"
+reqwest = { version = "0.11", features = ["json"] }

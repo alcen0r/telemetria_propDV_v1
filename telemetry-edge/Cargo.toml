@@ -1,0 +1,26 @@
+[package]
+name = "telemetry-edge"
+version = "2.0.0"
+edition = "2021"
+description = "Telemetria Edge — SocketCAN + Kvaser SDK Edition"
+
+[features]
+default = []
+kvaser = []
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
+socketcan = "3"
+sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-native-tls", "macros"] }
+csv = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
+libc = "0.2"
+
+
+[build-dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true

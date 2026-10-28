@@ -1,0 +1,1205 @@
+// [CARRO] main.rs - SocketCAN + Kvaser SDK Edition
+//
+// Lê frames CAN de duas fontes simultâneas:
+//   - Canal 0: SocketCAN (can0, can1...) via socketcan crate
+//   - Canal 1: Kvaser físico via kvaser-canlib FFI
+//
+// Aplica sistema de prioridades baseado em CSVs (igual ao Python):
+//   Prioridade 1 (Alta)  → arquivos VCU, BMS no nome
+//   Prioridade 2 (Média) → arquivos PT, PAINEL no nome
+//   Prioridade 3 (Baixa) → outros arquivos CSV
+//   Prioridade 4 (Default) → IDs não encontrados no CSV
+//
+// Envia para servidor via TCP (binário, little-endian, 24 bytes/frame)
+// Backup local em SQLite se servidor cair, com sincronização automática.
+//
+// Compilação:
+//   cargo build --release
+//
+// Uso:
+//   ./telemetry-edge --pasta_csv ./csv_data --ch0 can0 --ch1 0
+//   ./telemetry-edge --pasta_csv ./csv_data --ch0 can0              (só SocketCAN)
+//   ./telemetry-edge --pasta_csv ./csv_data --ch1 0 --bitrate1 250000 (só Kvaser)
+
+use std::collections::{BinaryHeap, HashMap};
+use std::cmp::Reverse;
+use std::fs;
+use std::path::Path;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering, AtomicI32}};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use socketcan::EmbeddedFrame;
+use clap::Parser;
+use tokio::net::TcpStream;
+use tokio::io::AsyncWriteExt;
+use tokio::sync::mpsc;
+use tokio::time::{sleep, Duration};
+use tokio::io::AsyncReadExt;
+use tracing::{info, warn, error};
+use sqlx::sqlite::SqlitePool;
+use sqlx::Row;
+
+// ─── CLI Arguments ─────────────────────────────────────────────
+#[derive(Parser, Debug)]
+#[command(
+    name = "telemetry-edge",
+    about = "Telemetria Edge — SocketCAN + Kvaser SDK Edition"
+)]
+struct Args {
+    /// Pasta com CSVs de IDs CAN (VCU, BMS, PT, PAINEL, etc.)
+    #[arg(long)]
+    pasta_csv: String,
+
+    /// Canal 0: interface SocketCAN (ex: 'can0', 'can1')
+    /// Se omitido, canal SocketCAN é desabilitado
+    #[arg(long)]
+    ch0: Option<String>,
+
+    /// Canal 1: interface SocketCAN (ex: 'can1')
+    /// Se omitido, canal 1 é desabilitado
+    #[arg(long)]
+    ch1: Option<String>,
+
+    /// Bitrate canal 0 (padrão: 500000)
+    #[arg(long, default_value = "500000")]
+    bitrate0: u32,
+
+    /// Bitrate canal 1 (padrão: 500000)
+    #[arg(long, default_value = "500000")]
+    bitrate1: u32,
+
+    /// Endereço do servidor (padrão: 143.106.207.95:8080)
+    #[arg(long, default_value = "143.106.207.95:8080")]
+    server: String,
+
+    /// ID do dispositivo (padrão: car_001)
+    #[arg(long, default_value = "car_001")]
+    device_id: String,
+
+    /// Caminho do banco SQLite de backup
+    #[arg(long, default_value = "sqlite:telemetria_backup.db")]
+    db_path: String,
+
+    /// Tamanho do lote para envio TCP (padrão: 10)
+    #[arg(long, default_value = "10")]
+    batch_size: usize,
+
+    /// Porta NTP para sincronização de clock com o servidor (padrão: 9999)
+    #[arg(long, default_value = "9999")]
+    ntp_port: u16,
+
+    /// Número de amostras NTP para calcular offset (padrão: 10)
+    #[arg(long, default_value = "10")]
+    ntp_samples: u32,
+
+    /// Janela de reordenação (ms) para mesclar can0/can1 por timestamp antes
+    /// de enviar ao servidor. Antes da correção do timestamp de kernel
+    /// (SO_TIMESTAMPING), essa janela precisava ser maior (50ms) pra
+    /// absorver o jitter introduzido pelo polling de userspace. Com o
+    /// timestamp de kernel ativo, a ordenação já vem praticamente correta
+    /// na origem — essa janela agora é só uma rede de segurança residual
+    /// para o caso raro de `set_timestamping` falhar em algum canal
+    /// (fallback de timestamp de userspace, ver `run_socketcan_reader`).
+    /// (padrão: 5ms)
+    #[arg(long, default_value = "5")]
+    reorder_window_ms: u64,
+}
+
+// ─── Estruturas ────────────────────────────────────────────────
+#[derive(Debug, Clone)]
+pub struct TelemetryFrame {
+    pub timestamp: f64,
+    pub can_id: u32,
+    pub data: [u8; 8],
+    pub priority: u8,   // 1=Alta, 2=Média, 3=Baixa, 4=Default
+    pub channel: String,
+}
+
+/// Mapa de prioridades: CAN ID (u32) → prioridade (1-4)
+pub type PriorityMap = HashMap<u32, u8>;
+
+// ─── Carregamento de Prioridades (igual ao Python) ─────────────
+pub fn load_priority_map(csv_dir: &str) -> PriorityMap {
+    let mut map: PriorityMap = HashMap::new();
+
+    let dir_path = Path::new(csv_dir);
+    if !dir_path.is_dir() {
+        error!("❌ Pasta CSV não encontrada: {}", csv_dir);
+        return map;
+    }
+
+    info!("📂 Carregando CSVs de '{}'...", csv_dir);
+
+    let entries = match fs::read_dir(dir_path) {
+        Ok(e) => e,
+        Err(e) => {
+            error!("❌ Erro ao ler pasta CSV: {}", e);
+            return map;
+        }
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        // Só arquivos .csv
+        if path.extension().and_then(|s| s.to_str()) != Some("csv") {
+            continue;
+        }
+
+        let filename = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_uppercase();
+
+        // Define prioridade pelo nome do arquivo (igual ao Python)
+        let priority: u8 = if filename.contains("VCU") || filename.contains("BMS") {
+            1 // Alta
+        } else if filename.contains("PT") || filename.contains("PAINEL") {
+            2 // Média
+        } else {
+            3 // Baixa
+        };
+
+        // Lê o CSV: coluna índice 1 (segunda coluna) tem os CAN IDs em hex
+        // Igual ao Python: usecols=[1], comment='/', skip_blank_lines=True
+        let mut count = 0usize;
+        match csv::ReaderBuilder::new()
+            .has_headers(false)
+            .comment(Some(b'/'))
+            .flexible(true)
+            .from_path(&path)
+        {
+            Ok(mut rdr) => {
+                for result in rdr.records() {
+                    if let Ok(record) = result {
+                        // Pega a segunda coluna (índice 1)
+                        if let Some(id_str) = record.get(1) {
+                            let cleaned = id_str.trim()
+                                .trim_start_matches("0x")
+                                .trim_start_matches("0X");
+                            if let Ok(id_int) = u32::from_str_radix(cleaned, 16) {
+                                map.insert(id_int, priority);
+                                count += 1;
+                            }
+                        }
+                    }
+                }
+                info!(
+                    "  {:<35} → Prioridade {}  ({} IDs)",
+                    path.file_name().unwrap_or_default().to_string_lossy(),
+                    priority,
+                    count
+                );
+            }
+            Err(e) => {
+                warn!("  ⚠️  Erro ao ler {:?}: {}", path.file_name().unwrap_or_default(), e);
+            }
+        }
+    }
+
+    info!("✅ Mapa de prioridades: {} IDs únicos\n", map.len());
+    map
+}
+
+// ─── Banco de Dados Local (Backup) ─────────────────────────────
+async fn init_database(db_path: &str) -> Result<SqlitePool, Box<dyn std::error::Error>> {
+    let file_path = db_path.trim_start_matches("sqlite:");
+    if !file_path.is_empty() && file_path != ":memory:" {
+        if !Path::new(file_path).exists() {
+            std::fs::File::create(file_path)?;
+        }
+    }
+
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(db_path)
+        .await?;
+
+    // WAL mode: escrita não bloqueia leitura, muito mais rápido para inserções contínuas
+    sqlx::query("PRAGMA journal_mode=WAL").execute(&pool).await?;
+    // Cache de 64MB em memória
+    sqlx::query("PRAGMA cache_size=-65536").execute(&pool).await?;
+    // Sync menos agressivo — aceita perder último segundo em caso de crash
+    sqlx::query("PRAGMA synchronous=NORMAL").execute(&pool).await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS raw_can_logs (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp  REAL    NOT NULL,
+            can_id     INTEGER NOT NULL,
+            data       BLOB    NOT NULL,
+            device_id  TEXT    NOT NULL DEFAULT 'car_001',
+            priority   INTEGER NOT NULL DEFAULT 4,
+            channel    TEXT    NOT NULL DEFAULT 'unknown',
+            synced     INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )"
+    ).execute(&pool).await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_synced ON raw_can_logs(synced)")
+        .execute(&pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_timestamp ON raw_can_logs(timestamp)")
+        .execute(&pool).await?;
+
+    info!("✅ Banco SQLite inicializado (WAL): {}", db_path);
+    Ok(pool)
+}
+
+// Writer SQLite dedicado — recebe frames pelo canal e insere em lote
+async fn run_sqlite_writer(
+    pool: SqlitePool,
+    mut rx: mpsc::Receiver<TelemetryFrame>,
+    device_id: String,
+) {
+    let mut pending: Vec<TelemetryFrame> = Vec::with_capacity(500);
+    let mut interval = tokio::time::interval(Duration::from_secs(2));
+    let mut total_saved: u64 = 0;
+
+    loop {
+        tokio::select! {
+            frame = rx.recv() => {
+                match frame {
+                    Some(f) => {
+                        pending.push(f);
+                        if pending.len() >= 500 {
+                            if let Err(e) = flush_to_sqlite(&pool, &pending, &device_id).await {
+                                error!("❌ SQLite batch error: {:?}", e);
+                            } else {
+                                total_saved += pending.len() as u64;
+                                info!("💾 {} frames salvos no backup local (total: {})", pending.len(), total_saved);
+                            }
+                            pending.clear();
+                        }
+                    }
+                    None => {
+                        // Canal fechado — flush final
+                        if !pending.is_empty() {
+                            let _ = flush_to_sqlite(&pool, &pending, &device_id).await;
+                        }
+                        info!("💾 SQLite writer encerrado. Total salvo: {}", total_saved);
+                        break;
+                    }
+                }
+            }
+            _ = interval.tick() => {
+                if !pending.is_empty() {
+                    if let Err(e) = flush_to_sqlite(&pool, &pending, &device_id).await {
+                        error!("❌ SQLite batch error: {:?}", e);
+                    } else {
+                        total_saved += pending.len() as u64;
+                        info!("💾 {} frames salvos no backup local (total: {})", pending.len(), total_saved);
+                    }
+                    pending.clear();
+                }
+            }
+        }
+    }
+}
+
+async fn flush_to_sqlite(
+    pool: &SqlitePool,
+    frames: &[TelemetryFrame],
+    device_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut tx = pool.begin().await?;
+    for frame in frames {
+        sqlx::query(
+            "INSERT INTO raw_can_logs (timestamp, can_id, data, device_id, priority, channel)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(frame.timestamp)
+        .bind(frame.can_id as i64)
+        .bind(&frame.data[..])
+        .bind(device_id)
+        .bind(frame.priority as i64)
+        .bind(&frame.channel)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+// ─── Envio TCP ─────────────────────────────────────────────────
+// Protocolo: [4 bytes: len][4 bytes: can_id][8 bytes: timestamp][8 bytes: data]
+// Total: 24 bytes por frame, tudo little-endian
+async fn send_batch(
+    stream: &mut tokio::net::tcp::OwnedWriteHalf,
+    frames: &[TelemetryFrame],
+) -> Result<(), Box<dyn std::error::Error>> {
+    for frame in frames {
+        let mut payload = Vec::with_capacity(20);
+        payload.extend_from_slice(&frame.can_id.to_le_bytes());    // 4 bytes
+        payload.extend_from_slice(&frame.timestamp.to_le_bytes()); // 8 bytes
+        payload.extend_from_slice(&frame.data);                    // 8 bytes
+
+        let len = payload.len() as u32;
+        stream.write_all(&len.to_le_bytes()).await?;
+        stream.write_all(&payload).await?;
+    }
+    stream.flush().await?;
+    Ok(())
+}
+
+// ─── Medição de Offset de Clock (NTP simplificado) ─────────────
+// offset > 0 → servidor adiantado em relação à Jetson
+// timestamp_corrigido = timestamp_jetson + offset
+async fn measure_clock_offset(
+    server_host: &str,
+    ntp_port: u16,
+    samples: u32,
+) -> f64 {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    info!("🕐 Medindo offset de clock ({} amostras)...", samples);
+
+    let ntp_addr = format!("{}:{}", server_host, ntp_port);
+    let mut offsets: Vec<f64> = Vec::new();
+
+    for i in 0..samples {
+        let Ok(mut stream) = tokio::net::TcpStream::connect(&ntp_addr).await else {
+            warn!("⚠️  NTP amostra {}: falha ao conectar", i + 1);
+            continue;
+        };
+
+        let t1 = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64();
+
+        if stream.write_all(&t1.to_le_bytes()).await.is_err() { continue; }
+        if stream.flush().await.is_err() { continue; }
+
+        let mut buf = [0u8; 16];
+        if stream.read_exact(&mut buf).await.is_err() { continue; }
+
+        let t4 = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64();
+
+        let t2 = f64::from_le_bytes(buf[0..8].try_into().unwrap());
+        let t3 = f64::from_le_bytes(buf[8..16].try_into().unwrap());
+
+        let rtt    = (t4 - t1) - (t3 - t2);
+        let offset = ((t2 - t1) + (t3 - t4)) / 2.0;
+
+        info!("  Amostra {:>2}: RTT={:.3}ms  Offset={:+.3}ms", i + 1, rtt * 1000.0, offset * 1000.0);
+        offsets.push(offset);
+    }
+
+    if offsets.is_empty() {
+        warn!("⚠️  Nenhuma amostra NTP coletada — offset = 0.0");
+        return 0.0;
+    }
+
+    // Mediana para robustez contra outliers
+    offsets.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let median = offsets[offsets.len() / 2];
+    info!("✅ Offset final (mediana): {:+.3}ms", median * 1000.0);
+    median
+}
+
+// ─── Sincronização de Pendentes ─────────────────────────────────
+async fn sync_pending_data(
+    pool: &SqlitePool,
+    stream: &mut tokio::net::tcp::OwnedWriteHalf,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let rows = sqlx::query(
+        "SELECT id, timestamp, can_id, data FROM raw_can_logs WHERE synced = 0 LIMIT 1000",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    if rows.is_empty() {
+        return Ok(0);
+    }
+
+    info!("🔄 Sincronizando {} registros pendentes...", rows.len());
+
+    let mut synced_ids: Vec<i64> = Vec::new();
+
+    for row in &rows {
+        let id: i64 = row.get("id");
+        let timestamp: f64 = row.get("timestamp");
+        let can_id: i64 = row.get("can_id");
+        let data: Vec<u8> = row.get("data");
+
+        let mut data_fixed = [0u8; 8];
+        let len = data.len().min(8);
+        data_fixed[..len].copy_from_slice(&data[..len]);
+
+        let frame = TelemetryFrame {
+            timestamp,
+            can_id: can_id as u32,
+            data: data_fixed,
+            priority: 4,
+            channel: "sync".to_string(),
+        };
+
+        if send_batch(stream, &[frame]).await.is_ok() {
+            synced_ids.push(id);
+        } else {
+            break; // Conexão caiu
+        }
+    }
+
+    if !synced_ids.is_empty() {
+        let ids_str: Vec<String> = synced_ids.iter().map(|id| id.to_string()).collect();
+        let query = format!(
+            "UPDATE raw_can_logs SET synced = 1 WHERE id IN ({})",
+            ids_str.join(",")
+        );
+        sqlx::query(&query).execute(pool).await?;
+        info!("✅ {} registros marcados como sincronizados", synced_ids.len());
+    }
+
+    Ok(synced_ids.len())
+}
+
+// ─── Leitor SocketCAN ──────────────────────────────────────────
+// ─── Âncora de Clock Monotônico ──────────────────────────────────
+//
+// PROBLEMA: os timestamps de cada frame CAN eram gerados via
+// `SystemTime::now()` (relógio de parede / CLOCK_REALTIME). Esse relógio
+// pode sofrer "steps" (saltos instantâneos, para frente OU para trás)
+// disparados pelo Chrony — em especial o `chronyc -a makestep` chamado
+// pelo dispatcher de rede (`99-eracing-route.sh`) toda vez que a interface
+// `eth0` sobe (não só no boot: também em quedas/reconexões de link, comuns
+// com EMI/vibração no carro ou handover de rede em pista).
+//
+// Um salto para trás de mais de `REAL_DISCONTINUITY_SEC` (2s) no meio de
+// uma sessão é lido pelo `track_state.rs` do servidor como uma
+// "descontinuidade real" e reseta TODO o estado da pista — mapa aprendido,
+// path, landmarks, contagem de voltas — mesmo que o mapa já estivesse
+// congelado depois da primeira volta. Isso é exatamente o sintoma
+// relatado: delay + mapa "recomeçando"/não plotando direito.
+//
+// SOLUÇÃO: usar `Instant` (CLOCK_MONOTONIC), que o Chrony/NTP NUNCA step
+// — apenas disciplina por slew. Capturamos uma âncora (Instant + epoch
+// real) uma única vez na subida do processo e derivamos o timestamp de
+// cada frame a partir do tempo monotônico decorrido. Isso preserva
+// continuidade de dt mesmo que o relógio de parede sofra um step.
+#[derive(Clone, Copy)]
+struct ClockAnchor {
+    instant: Instant,
+    epoch_at_anchor: f64,
+}
+
+impl ClockAnchor {
+    fn capture() -> Self {
+        Self {
+            instant: Instant::now(),
+            epoch_at_anchor: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64(),
+        }
+    }
+
+    /// Timestamp "epoch" atual, imune a steps do relógio de parede após a
+    /// captura da âncora — deriva de tempo monotônico decorrido, não de
+    /// uma nova leitura de `SystemTime::now()`.
+    fn now_epoch(&self) -> f64 {
+        self.epoch_at_anchor + self.instant.elapsed().as_secs_f64()
+    }
+
+    /// Igual a `now_epoch()`, mas descontando `age_secs` — a defasagem real
+    /// entre a chegada do frame no kernel e o instante em que a task de
+    /// userspace conseguiu processá-lo (ver `run_socketcan_reader`).
+    ///
+    /// `age_secs` é calculado como `wallclock_agora - kernel_rx_timestamp`,
+    /// uma SUBTRAÇÃO entre duas leituras de relógio de parede tomadas a
+    /// microssegundos de distância uma da outra — por isso é seguro mesmo
+    /// que o relógio de parede sofra um step em outro momento da sessão
+    /// (o step não acontece nesse intervalo minúsculo entre as duas leituras).
+    /// Isso dá o melhor dos dois mundos: ordenação precisa (do kernel) +
+    /// imunidade a steps do Chrony (da âncora monotônica).
+    fn now_epoch_corrected_for_age(&self, age_secs: f64) -> f64 {
+        self.now_epoch() - age_secs.max(0.0)
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn run_socketcan_reader(
+    iface: String,
+    _bitrate: u32,
+    priority_map: Arc<PriorityMap>,
+    tx: mpsc::Sender<TelemetryFrame>,
+    running: Arc<AtomicBool>,
+    clock_offset: f64,
+    clock_anchor: ClockAnchor,
+) {
+    use socketcan::{CanSocket, Socket};
+
+    while running.load(Ordering::Relaxed) {
+        info!("📡 Tentando abrir SocketCAN '{}'...", iface);
+
+        let socket = match CanSocket::open(&iface) {
+            Ok(s) => {
+                info!("✅ SocketCAN '{}' aberto com sucesso", iface);
+                s
+            }
+            Err(e) => {
+                error!("❌ Falha ao abrir SocketCAN '{}': {}. Tentando novamente em 2s...", iface, e);
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
+        };
+
+        if let Err(e) = socket.set_nonblocking(true) {
+            warn!("⚠️  Não foi possível setar non-blocking em '{}': {}", iface, e);
+        }
+
+        // Timestamp de recepção dado pelo KERNEL (SO_TIMESTAMPING), carimbado
+        // no instante real de chegada do frame na pilha de rede — antes de
+        // qualquer scheduling do tokio. Isso elimina o jitter artificial
+        // introduzido pelo loop de polling (sleep de 500µs) que antes fazia
+        // o timestamp refletir "quando conseguimos processar" em vez de
+        // "quando o frame chegou de fato". É a causa raiz do descompasso
+        // entre can0/can1 — corrigindo aqui, o buffer de reordenação em
+        // `run_reorder_buffer` pode ter uma janela bem menor (ou nenhuma).
+        //
+        // Nota: `sw` ainda é relógio de parede — combinamos com a
+        // ClockAnchor via `now_epoch_corrected_for_age()` pra manter a
+        // imunidade a steps do Chrony.
+        use socketcan::SocketOptions as _;
+
+        let mut kernel_timestamps_supported = false;
+        match socket.set_recv_timestamp(true) {
+            Ok(()) => {
+                if let Err(e) = socket.set_timestamping(
+                    socketcan::SOF_TIMESTAMPING_RX_SOFTWARE
+                        | socketcan::SOF_TIMESTAMPING_SOFTWARE
+                        | socketcan::SOF_TIMESTAMPING_OPT_CMSG,
+                ) {
+                    warn!(
+                        "⚠️  Não foi possível configurar SO_TIMESTAMPING em '{}': {}. \
+                         Caindo para timestamp de userspace (menos preciso).",
+                        iface, e
+                    );
+                } else {
+                    kernel_timestamps_supported = true;
+                    info!("🕐 Timestamp de kernel (RX_SOFTWARE) ativo em '{}'", iface);
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "⚠️  Não foi possível habilitar recv_timestamp em '{}': {}. \
+                     Caindo para timestamp de userspace (menos preciso).",
+                    iface, e
+                );
+            }
+        }
+
+        // Loop de leitura
+        while running.load(Ordering::Relaxed) {
+            // Quando o kernel oferece timestamp (`sw`), usamos
+            // `read_frame_with_timestamps()` e calculamos a idade real do
+            // frame (tempo entre chegada no kernel e processamento aqui).
+            // Essa idade é aplicada sobre a ClockAnchor monotônica —
+            // union dos dois mundos: ordenação precisa do kernel +
+            // imunidade a steps do Chrony.
+            //
+            // ATENÇÃO: o tipo exato de `ts.sw` (SystemTime vs Duration)
+            // deve ser conferido com `cargo doc --open -p socketcan` no
+            // ambiente de vocês antes de compilar — não consegui validar
+            // isso aqui por falta de toolchain compatível no sandbox.
+            let read_result: std::io::Result<(socketcan::CanFrame, f64)> = if kernel_timestamps_supported {
+                socket.read_frame_with_timestamps().map(|(frame, ts)| {
+                    let age = ts
+                        .sw
+                        .and_then(|sw| sw.duration_since(UNIX_EPOCH).ok())
+                        .map(|kernel_wall| {
+                            let now_wall = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap_or_default();
+                            (now_wall.as_secs_f64() - kernel_wall.as_secs_f64()).max(0.0)
+                        })
+                        .unwrap_or(0.0);
+                    (frame, age)
+                })
+            } else {
+                socket.read_frame().map(|frame| (frame, 0.0))
+            };
+
+            match read_result {
+                Ok((frame, age)) => {
+                    let timestamp = clock_anchor.now_epoch_corrected_for_age(age) + clock_offset;
+
+                    let can_id: u32 = match frame.id() {
+                        socketcan::Id::Standard(id) => id.as_raw() as u32,
+                        socketcan::Id::Extended(id) => id.as_raw(),
+                    };
+
+                    let data_slice = frame.data();
+                    let mut data_fixed = [0u8; 8];
+                    data_fixed[..data_slice.len().min(8)].copy_from_slice(&data_slice[..data_slice.len().min(8)]);
+
+                    let priority = *priority_map.get(&can_id).unwrap_or(&4);
+
+                    let tframe = TelemetryFrame {
+                        timestamp,
+                        can_id,
+                        data: data_fixed,
+                        priority,
+                        channel: iface.clone(),
+                    };
+
+                    // Log periódico de recepção (debug)
+                    static mut RECV_COUNT: u64 = 0;
+                    unsafe {
+                        RECV_COUNT += 1;
+                        if RECV_COUNT % 1000 == 0 {
+                            info!("📥 [CAN RECV] {} | Total: {}", iface, RECV_COUNT);
+                        }
+                    }
+
+                    if tx.send(tframe).await.is_err() {
+                        return; // Canal fechado, encerra a task
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    tokio::time::sleep(Duration::from_micros(500)).await;
+                }
+                Err(e) => {
+                    error!("❌ Erro crítico ao ler SocketCAN '{}': {:?}. Reiniciando socket...", iface, e);
+                    break; // Sai do loop de leitura para tentar reabrir o socket
+                }
+            }
+        }
+        
+        if running.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }
+
+    info!("🛑 Leitor SocketCAN '{}' encerrado", iface);
+}
+
+// ─── Buffer de Reordenação (can0 + can1) ────────────────────────
+//
+// can0 e can1 são lidos por duas tasks tokio concorrentes que escrevem no
+// MESMO mpsc::channel. A ordem de CHEGADA nesse canal não é garantida bater
+// com a ordem real de timestamp de captura — um frame do can1 pode "furar
+// a fila" de um frame do can0 ligeiramente mais antigo, mesmo usando o
+// mesmo relógio (SystemTime::now() + clock_offset), simplesmente por causa
+// do scheduling entre as duas tasks.
+//
+// Isso quebra qualquer lógica no servidor que assuma timestamps monotônicos
+// entre frames consecutivos — como o dead-reckoning em track_state.rs, que
+// resetava TODO o aprendizado da pista sempre que via um timestamp "voltar
+// no tempo" (o que, com dois barramentos concorrentes, acontece o tempo
+// todo — daí o cockpit ficar preso pra sempre em "aprendendo 1 volta").
+//
+// SOLUÇÃO: um pequeno buffer de reordenação com watermark. Frames entram
+// numa min-heap por timestamp; a cada novo frame, atualizamos o "watermark"
+// (maior timestamp já visto) e escoamos, em ordem crescente, tudo que já é
+// mais antigo que `watermark - window`. Isso garante saída ordenada por
+// timestamp mesmo com jitter entre can0/can1, ao custo de uma latência fixa
+// de ~`window_ms` (default 50ms — imperceptível pra telemetria, mas cobre
+// folgado o jitter típico de scheduling).
+struct TsFrame(TelemetryFrame);
+
+impl PartialEq for TsFrame {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.timestamp == other.0.timestamp
+    }
+}
+impl Eq for TsFrame {}
+impl PartialOrd for TsFrame {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for TsFrame {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0
+            .timestamp
+            .partial_cmp(&other.0.timestamp)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }
+}
+
+async fn run_reorder_buffer(
+    mut raw_rx: mpsc::Receiver<TelemetryFrame>,
+    ordered_tx: mpsc::Sender<TelemetryFrame>,
+    window_ms: u64,
+) {
+    let window_secs = (window_ms.max(1) as f64) / 1000.0;
+    let mut heap: BinaryHeap<Reverse<TsFrame>> = BinaryHeap::new();
+    let mut watermark = f64::NEG_INFINITY;
+
+    while let Some(frame) = raw_rx.recv().await {
+        if frame.timestamp > watermark {
+            watermark = frame.timestamp;
+        }
+        heap.push(Reverse(TsFrame(frame)));
+
+        // Escoa, em ordem, tudo que já "amadureceu" (mais velho que a janela).
+        let cutoff = watermark - window_secs;
+        while matches!(heap.peek(), Some(Reverse(TsFrame(f))) if f.timestamp <= cutoff) {
+            let Some(Reverse(TsFrame(f))) = heap.pop() else { break };
+            if ordered_tx.send(f).await.is_err() {
+                return; // send loop encerrou, nada mais a fazer
+            }
+        }
+    }
+
+    // Canal raw fechado (leitores CAN encerraram) — escoa o resto em ordem.
+    let mut remaining: Vec<TsFrame> = heap.into_iter().map(|Reverse(f)| f).collect();
+    remaining.sort();
+    for TsFrame(f) in remaining {
+        if ordered_tx.send(f).await.is_err() {
+            break;
+        }
+    }
+}
+
+// ─── Main ───────────────────────────────────────────────────────
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Logging
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
+
+    let args = Args::parse();
+    let device_id = args.device_id.clone();
+
+    // Validação mínima
+    if args.ch0.is_none() && args.ch1.is_none() {
+        error!("❌ Pelo menos um canal (--ch0 ou --ch1) deve ser especificado.");
+        std::process::exit(1);
+    }
+
+    println!("═══════════════════════════════════════════════════════");
+    println!("  Telemetria Edge — SocketCAN + Kvaser SDK Edition");
+    println!("  Servidor: {}", args.server);
+    println!("  Dispositivo: {}", args.device_id);
+    println!("═══════════════════════════════════════════════════════\n");
+
+    // 1. Carrega mapa de prioridades
+    let priority_map = Arc::new(load_priority_map(&args.pasta_csv));
+    if priority_map.is_empty() {
+        warn!("⚠️  Mapa de prioridades vazio — todos os frames terão prioridade 4");
+    }
+
+    // Mede offset de clock entre Jetson e servidor
+    let server_host = args.server.split(':').next().unwrap_or("143.106.207.95");
+    let clock_offset = if args.ntp_port > 0 {
+        measure_clock_offset(server_host, args.ntp_port, args.ntp_samples).await
+    } else {
+        warn!("⚠️  NTP desabilitado (--ntp_port 0) — timestamps sem correção");
+        0.0
+    };
+    let clock_offset = Arc::new(clock_offset);
+
+    // Âncora monotônica única para todo o processo — ver comentário na
+    // definição de ClockAnchor. Capturada aqui (após o offset NTP, se
+    // aplicável) para que todos os timestamps dali em diante derivem do
+    // mesmo ponto de referência monotônico, imune a steps do Chrony.
+    let clock_anchor = ClockAnchor::capture();
+
+    // 2. Inicializa banco local de backup
+    let db_pool = init_database(&args.db_path).await?;
+    let (sqlite_tx, sqlite_rx) = mpsc::channel::<TelemetryFrame>(100_000);
+    {
+        let pool = db_pool.clone();
+        let dev = device_id.clone();
+        tokio::spawn(async move {
+            run_sqlite_writer(pool, sqlite_rx, dev).await;
+        });
+    }
+
+    // 3. Canais de comunicação: leitores CAN → buffer de reordenação → loop de envio
+    //
+    //    can0 ─┐
+    //          ├─► raw_tx/raw_rx ─► run_reorder_buffer() ─► ordered_tx/rx ─► loop de envio
+    //    can1 ─┘
+    //
+    //    O canal "raw" recebe frames de can0/can1 na ordem de CHEGADA (que pode
+    //    estar levemente fora de ordem por jitter de scheduling entre as duas
+    //    tasks). O buffer de reordenação reordena por timestamp antes de repassar
+    //    pro canal "ordered", que o loop de envio consome exatamente como antes.
+    let (raw_tx, raw_rx) = mpsc::channel::<TelemetryFrame>(50_000);
+    let (tx, mut rx) = mpsc::channel::<TelemetryFrame>(50_000);
+
+    {
+        let window_ms = args.reorder_window_ms;
+        info!("🔀 Buffer de reordenação can0/can1 ativo (janela: {}ms)", window_ms);
+        tokio::spawn(async move {
+            run_reorder_buffer(raw_rx, tx, window_ms).await;
+        });
+    }
+
+    // Flag de controle para encerrar threads graciosamente
+    let running = Arc::new(AtomicBool::new(true));
+
+    let active_fd = Arc::new(AtomicI32::new(-1));
+
+    // 3.5. Task geradora de frames virtuais de rede (ID 0x700 / 1792)
+    {
+        let tx_clone = raw_tx.clone();
+        let running_clone = running.clone();
+        let anchor = clock_anchor;
+        let pool = db_pool.clone();
+        let fd_clone = active_fd.clone();
+        
+        tokio::spawn(async move {
+            let mut seq_num: u16 = 0;
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            
+            while running_clone.load(Ordering::Relaxed) {
+                interval.tick().await;
+                
+                // 1. RSSI e Qualidade Física
+                let (rssi, qual, noise) = get_wifi_rssi_qual_noise();
+                
+                // 2. TCP RTT e Retransmissions (somente Linux)
+                #[cfg(target_os = "linux")]
+                let (rtt, retrans) = {
+                    let fd = fd_clone.load(Ordering::Relaxed);
+                    if fd >= 0 {
+                        get_tcp_info(fd)
+                    } else {
+                        (0, 0)
+                    }
+                };
+                #[cfg(not(target_os = "linux"))]
+                let (rtt, retrans) = (0u8, 0u8);
+                
+                // 3. Backlog de frames no banco SQLite
+                let backlog = match sqlx::query("SELECT COUNT(*) FROM raw_can_logs WHERE synced = 0")
+                    .fetch_one(&pool)
+                    .await
+                {
+                    Ok(row) => row.get::<i64, _>(0),
+                    Err(_) => 0,
+                };
+                // Divide por 100 e clamps no u8 (0..25500 frames backlog)
+                let backlog_k = std::cmp::min(255, (backlog / 100) as u32) as u8;
+                
+                // Monta o payload (8 bytes)
+                let mut data = [0u8; 8];
+                data[0..2].copy_from_slice(&seq_num.to_le_bytes()); // 2 bytes seq
+                data[2] = rssi as u8;                               // 1 byte RSSI (signed i8)
+                data[3] = noise as u8;                              // 1 byte Noise (signed i8)
+                data[4] = qual;                                     // 1 byte Quality (0..100)
+                data[5] = rtt;                                      // 1 byte TCP RTT (ms)
+                data[6] = retrans;                                  // 1 byte TCP Retrans (total)
+                data[7] = backlog_k;                                // 1 byte Backlog (x100)
+                
+                let frame = TelemetryFrame {
+                    timestamp: anchor.now_epoch(),
+                    can_id: 0x700,
+                    data,
+                    priority: 1, // Alta prioridade
+                    channel: "virtual".to_string(),
+                };
+                
+                let _ = tx_clone.send(frame).await;
+                seq_num = seq_num.wrapping_add(1);
+            }
+        });
+    }
+
+    // Ctrl+C handler
+    {
+        let running_clone = running.clone();
+        tokio::spawn(async move {
+            tokio::signal::ctrl_c().await.ok();
+            info!("\n🛑 Sinal de encerramento recebido...");
+            running_clone.store(false, Ordering::Relaxed);
+        });
+    }
+
+    // 4. Inicia leitores CAN em tasks separadas (escrevem no canal RAW)
+    if let Some(ref iface) = args.ch0 {
+        let offset = clock_offset.clone();
+        let iface_clone = iface.clone();
+        let pmap = priority_map.clone();
+        let tx_clone = raw_tx.clone();
+        let running_clone = running.clone();
+        let bitrate = args.bitrate0;
+        let anchor = clock_anchor;
+
+        tokio::spawn(async move {
+            #[cfg(target_os = "linux")]
+            run_socketcan_reader(iface_clone, bitrate, pmap, tx_clone, running_clone, *offset, anchor).await;
+
+            #[cfg(not(target_os = "linux"))]
+            {
+                error!("❌ SocketCAN só funciona em Linux. Canal '{}' desabilitado.", iface_clone);
+            }
+        });
+    }
+
+    if let Some(ref iface) = args.ch1 {
+        let offset = clock_offset.clone();
+        let iface_clone = iface.clone();
+        let pmap = priority_map.clone();
+        let tx_clone = raw_tx.clone();
+        let running_clone = running.clone();
+        let bitrate = args.bitrate1;
+        let anchor = clock_anchor;
+
+        tokio::spawn(async move {
+            #[cfg(target_os = "linux")]
+            run_socketcan_reader(iface_clone, bitrate, pmap, tx_clone, running_clone, *offset, anchor).await;
+
+            #[cfg(not(target_os = "linux"))]
+            {
+                error!("❌ SocketCAN só funciona em Linux. Canal '{}' desabilitado.", iface_clone);
+            }
+        });
+    }
+
+    // raw_tx original não é mais necessário — os clones estão nas tasks.
+    // Isso permite que run_reorder_buffer detecte o fim (raw_rx.recv() == None)
+    // quando ambos os leitores CAN encerrarem.
+    drop(raw_tx);
+
+    // 5. Loop principal: recebe frames do canal e envia ao servidor
+    let batch_size = args.batch_size;
+    let server_addr = args.server.clone();
+    let device_id = args.device_id.clone();
+
+    let mut frame_buffer: Vec<TelemetryFrame> = Vec::with_capacity(batch_size);
+    let mut total_sent: u64 = 0;
+    let mut total_backed_up: u64 = 0;
+
+    loop {
+        if !running.load(Ordering::Relaxed) {
+            info!("🛑 Encerrando loop principal...");
+            break;
+        }
+
+        info!("🔌 Tentando conectar ao servidor: {}", server_addr);
+
+        let (mut read_half, write_half) = loop {
+            match TcpStream::connect(&server_addr).await {
+                Ok(s) => {
+                    info!("✅ Conectado ao servidor!");
+                    #[cfg(target_os = "linux")]
+                    {
+                        use std::os::unix::io::AsRawFd;
+                        active_fd.store(s.as_raw_fd(), Ordering::Relaxed);
+                    }
+                    break s.into_split();
+                }
+                Err(e) => {
+                    if !running.load(Ordering::Relaxed) {
+                        info!("🛑 Encerrando antes de conectar.");
+                        return Ok(());
+                    }
+                    warn!("❌ Falha ao conectar: {}. Tentando novamente em 1s...", e);
+                    sleep(Duration::from_secs(1)).await;
+                }
+            }
+        };
+        let write_half = Arc::new(tokio::sync::Mutex::new(write_half));
+
+        {
+            let running_cmd = running.clone();
+            tokio::spawn(async move {
+                loop {
+                    if !running_cmd.load(Ordering::Relaxed) { break; }
+
+                    let mut len_buf = [0u8; 4];
+                    if read_half.read_exact(&mut len_buf).await.is_err() {
+                        warn!("🔌 Conexão de comando encerrada");
+                        break;
+                    }
+
+                    let len = u32::from_le_bytes(len_buf) as usize;
+                    if len == 0 || len > 1024 { continue; }
+
+                    let mut payload = vec![0u8; len];
+                    if read_half.read_exact(&mut payload).await.is_err() { break; }
+
+                    if payload.len() >= 4 {
+                        let cmd_can_id = u32::from_le_bytes(payload[0..4].try_into().unwrap());
+                        if cmd_can_id == 0x67 {
+                            let mut p = [0u8; 8];
+                            if payload.len() >= 20 {
+                                p.copy_from_slice(&payload[12..20]);
+                            }
+                            let hex_payload: Vec<String> = p.iter().map(|b| format!("{:02X}", b)).collect();
+                            if p[0] == 0x01 {
+                                info!("🟢 RESUME recebido do servidor — enviando 0x67 [{}] no CAN", hex_payload.join(" "));
+                            } else {
+                                info!("🛑 EMERGENCY STOP recebido do servidor — enviando 0x67 [{}] no CAN", hex_payload.join(" "));
+                            }
+                            send_emergency_can(p);
+                        }
+                    }
+                }
+            });
+        }
+
+        // Sincroniza dados pendentes do backup
+        {
+            let mut wh = write_half.lock().await;
+            match sync_pending_data(&db_pool, &mut *wh).await {
+                Ok(n) if n > 0 => info!("✅ {} registros pendentes sincronizados", n),
+                Err(e) => warn!("⚠️  Erro ao sincronizar pendentes: {}", e),
+                _ => {}
+            }
+        } // lock solto aqui antes do 'send_loop
+
+        // Loop de envio
+        'send_loop: loop {
+            if !running.load(Ordering::Relaxed) {
+                break 'send_loop;
+            }
+
+            // Coleta até batch_size frames do canal (não-bloqueante com timeout pequeno)
+            frame_buffer.clear();
+
+            // Recebe o primeiro frame com timeout (evita busy-wait)
+            match tokio::time::timeout(Duration::from_millis(5), rx.recv()).await {
+                Ok(Some(frame)) => {
+                    frame_buffer.push(frame);
+                }
+                Ok(None) => {
+                    // Canal fechado — todos os leitores encerraram
+                    info!("📭 Canal de frames fechado. Encerrando.");
+                    break 'send_loop;
+                }
+                Err(_) => {
+                    // Timeout — sem frames no momento
+                    continue 'send_loop;
+                }
+            }
+
+            // Tenta pegar mais frames sem bloquear (até batch_size)
+            while frame_buffer.len() < batch_size {
+                match rx.try_recv() {
+                    Ok(frame) => frame_buffer.push(frame),
+                    Err(_) => break,
+                }
+            }
+
+            // Log a cada 1000 frames enviados
+            total_sent += frame_buffer.len() as u64;
+            if total_sent % 1000 < frame_buffer.len() as u64 {
+                let sample = &frame_buffer[0];
+                info!(
+                    "📊 Enviados: {} | Backup: {} | Último: ID=0x{:X} Prio={} Canal={}",
+                    total_sent, total_backed_up,
+                    sample.can_id, sample.priority, sample.channel
+                );
+            }
+
+            // Tenta enviar ao servidor
+            let mut wh = write_half.lock().await;
+            match send_batch(&mut *wh, &frame_buffer).await {
+                Ok(_) => {
+                    // Sucesso — segue
+                }
+                Err(e) => {
+                    warn!("❌ Erro ao enviar: {}. Desviando {} frames para backup local...", e, frame_buffer.len());
+                    #[cfg(target_os = "linux")]
+                    active_fd.store(-1, Ordering::Relaxed);
+                    for frame in &frame_buffer {
+                        if sqlite_tx.try_send(frame.clone()).is_err() {
+                            error!("❌ Buffer SQLite cheio — frame descartado");
+                        }
+                    }
+                    total_backed_up += frame_buffer.len() as u64;
+                    break 'send_loop;
+                }
+            }
+        }
+
+        if !running.load(Ordering::Relaxed) {
+            break;
+        }
+
+        warn!("⚠️  Conexão perdida. Reconectando em 1s...");
+        sleep(Duration::from_secs(1)).await;
+    }
+
+    info!("📊 Resumo final — Enviados: {} | Backup local: {}", total_sent, total_backed_up);
+    info!("👋 Telemetria Edge encerrada.");
+    std::process::exit(0);
+}
+
+#[cfg(target_os = "linux")]
+fn send_emergency_can(payload: [u8; 8]) {
+    use socketcan::{CanFrame, CanSocket, ExtendedId, Id, Socket};
+
+    for iface in &["can0", "can1"] {
+        match CanSocket::open(iface) {
+            Ok(socket) => {
+                let id = ExtendedId::new(0x67).expect("ID válido");
+                let frame = CanFrame::new(Id::Extended(id), &payload)
+                    .expect("Frame válido");
+                match socket.write_frame(&frame) {
+                    Ok(_) => tracing::info!("✅ Frame 0x67 enviado em {}", iface),
+                    Err(e) => tracing::error!("❌ Falha ao enviar 0x67 em {}: {}", iface, e),
+                }
+            }
+            Err(e) => tracing::error!("❌ Não foi possível abrir {} para emergency: {}", iface, e),
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn send_emergency_can(_payload: [u8; 8]) {
+    tracing::warn!("⚠️  Emergency CAN não disponível fora de Linux");
+}
+
+fn get_wifi_rssi_qual_noise() -> (i8, u8, i8) {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(content) = std::fs::read_to_string("/proc/net/wireless") {
+            for line in content.lines() {
+                if line.contains(":") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 5 {
+                        let qual_str = parts[2].trim_end_matches('.');
+                        let rssi_str = parts[3].trim_end_matches('.');
+                        let noise_str = parts[4].trim_end_matches('.');
+                        
+                        let qual = qual_str.parse::<f32>().unwrap_or(0.0) as u8;
+                        let rssi = rssi_str.parse::<f32>().unwrap_or(0.0) as i8;
+                        let noise = noise_str.parse::<f32>().unwrap_or(0.0) as i8;
+                        return (rssi, qual, noise);
+                    }
+                }
+            }
+        }
+    }
+    (0, 0, 0)
+}
+
+#[cfg(target_os = "linux")]
+fn get_tcp_info(fd: i32) -> (u8, u8) {
+    use std::mem;
+    let mut tcp_info: libc::tcp_info = unsafe { mem::zeroed() };
+    let mut len = mem::size_of::<libc::tcp_info>() as libc::socklen_t;
+    
+    let res = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::IPPROTO_TCP,
+            libc::TCP_INFO,
+            &mut tcp_info as *mut _ as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    
+    if res == 0 {
+        let rtt_ms = tcp_info.tcpi_rtt / 1000;
+        let rtt = std::cmp::min(255, rtt_ms) as u8;
+        let retrans = std::cmp::min(255, tcp_info.tcpi_total_retrans) as u8;
+        (rtt, retrans)
+    } else {
+        let err = std::io::Error::last_os_error();
+        static LAST_LOG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+        let last = LAST_LOG.load(std::sync::atomic::Ordering::Relaxed);
+        if now - last >= 10 {
+            LAST_LOG.store(now, std::sync::atomic::Ordering::Relaxed);
+            tracing::warn!("⚠️ getsockopt(TCP_INFO, fd={}) falhou: {}", fd, err);
+        }
+        (0, 0)
+    }
+}
