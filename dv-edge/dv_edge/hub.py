@@ -35,8 +35,14 @@ class Hub:
         if self.perc_frame != "car":
             return self.perc_cones
         p = self.pose
-        c, s = math.cos(p["yaw"]), math.sin(p["yaw"])
-        return [(p["x"] + x * c - y * s, p["y"] + x * s + y * c, col) for x, y, col in self.perc_cones]
+        c = math.cos(p["yaw"])
+        s = math.sin(p["yaw"])
+        cones = []
+        for lateral, frente, cor in self.perc_cones:
+            x = p["x"] + frente * c + lateral * s
+            y = p["y"] + frente * s - lateral * c
+            cones.append((x, y, cor))
+        return cones
 
     def snapshot(self, include_map=False):
         """Estado cru (percepção no frame original) para o log de sessão."""
