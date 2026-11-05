@@ -1,0 +1,12 @@
+.dv-page { display: grid; grid-template-columns: minmax(0, 2fr) minmax(220px, 1fr); gap: 12px; padding: 12px; }
+@media (max-width: 900px) { .dv-page { grid-template-columns: 1fr; } }
+.dv-panel, .dv-card, .dv-steer { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; }
+.dv-panel { padding: 8px; }
+.dv-canvas { width: 100%; height: min(70vh, 640px); display: block; }
+.dv-legend { color: var(--text2); font-size: 12px; padding: 4px 6px; }
+.dv-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; align-content: start; }
+.dv-card { padding: 10px; }
+.dv-card small { display: block; color: var(--text2); font-size: 12px; }
+.dv-card b { font-family: var(--mono); font-size: 20px; }
+.dv-card span { color: var(--text2); font-size: 12px; }
+

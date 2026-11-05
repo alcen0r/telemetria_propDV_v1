@@ -110,4 +110,3 @@ def run(hub, stop: threading.Event):
     finally:
         node.destroy_node()
         rclpy.shutdown()
-```
